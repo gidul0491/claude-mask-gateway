@@ -1,6 +1,7 @@
 // Claude Code 가 Anthropic 에 보내는 요청이 모두 지나가는 통로. 이 컴퓨터 안(127.0.0.1)에서만 열린다.
-// 요청에 든 글(시스템 프롬프트, 질문, 도구 결과, Claude 가 부른 도구 입력)의 개인정보를 가려서 보낸다.
+// 요청에 든 글(시스템 프롬프트, 질문, 도구 결과, Claude 의 지난 답 글과 도구 입력)의 개인정보를 가려서 보낸다.
 // Claude 의 생각 블록은 서명이 붙어 있어 바꾸면 요청이 거절되므로 그대로 둔다.
+// 응답의 답 글은 개인정보 이름표를 원래 값으로 바꿔 사람에게 보여 준다(answer-text.unmasker.js). 비밀값은 이름표로 둔다.
 // 도구를 실행하기 직전 훅이 UNMASK_PATH 로 가린 값을 원래 값으로 되돌려 받는다.
 // 명령 실행(Bash)은 UNMASK_WITH_SECRETS_PATH 로 비밀값까지 되돌린다. 파일 쓰기·검색에는 비밀값을 넣지 않아 파일에 남지 않게 한다.
 // 요청마다 무엇이 지나갔는지 글 내용 없이 종류·개수만 기록 파일(gatewayLogFile)에 남긴다.
@@ -9,6 +10,7 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { createAnswerStreamUnmasker, maskPreviousAnswer, unmaskAnswerBody } from './answer-text.unmasker.js';
 import { findMaskedValues, isKnownMaskedValue, maskSensitiveText, unmaskSensitiveText } from './sensitive-text.masker.js';
 import { localTimeText } from './local-time.js';
 
@@ -17,7 +19,8 @@ export const UNMASK_PATH = '/masking/unmask';
 export const UNMASK_WITH_SECRETS_PATH = '/masking/unmask-with-secrets';
 const UNMASK_PATHS = new Set([UNMASK_PATH, UNMASK_WITH_SECRETS_PATH]);
 const DEFAULT_GATEWAY_LOG_FILE = path.join(import.meta.dirname, '..', 'log', 'masking-gateway.jsonl');
-const NOT_FORWARDED_HEADERS = ['host', 'connection', 'keep-alive', 'transfer-encoding', 'content-length'];
+// 응답 글을 읽어 바꿔야 하므로 압축하지 않은 응답을 받는다(accept-encoding 을 넘기지 않는다)
+const NOT_FORWARDED_HEADERS = ['host', 'connection', 'keep-alive', 'transfer-encoding', 'content-length', 'accept-encoding'];
 const ERROR_BODY_LOG_LIMIT = 2000;
 
 let maskingGatewayUrl = null;
@@ -48,13 +51,13 @@ async function relayRequest(clientRequest, clientResponse) {
   const { forwardBody, requestSummary } = await maskRequestBody(requestBody, clientRequest.headers);
   const upstreamResponse = await sendToAnthropic(clientRequest, forwardBody);
   clientResponse.writeHead(upstreamResponse.statusCode, withoutNotForwardedHeaders(upstreamResponse.headers));
-  const errorBodyText = await pipeResponse(upstreamResponse, clientResponse);
+  const responseSummary = await relayResponse(upstreamResponse, clientResponse);
   writeGatewayLog({
     path: clientRequest.url,
     status: upstreamResponse.statusCode,
     elapsedMs: Date.now() - startedAt,
     ...requestSummary,
-    ...(errorBodyText && { errorBody: errorBodyText }),
+    ...responseSummary,
   });
 }
 
@@ -85,10 +88,10 @@ async function maskRequestBody(requestBody, requestHeaders) {
   const requestJson = parseJson(requestBody);
   if (!requestJson?.messages) return { forwardBody: requestBody, requestSummary: { notMasked: '메시지가 없는 요청' } };
 
-  const maskCount = { systemTexts: 0, userTexts: 0, toolResultTexts: 0, toolInputs: 0, changedTexts: 0 };
-  const maskCountedText = async (originalText, textKind) => {
+  const maskCount = { systemTexts: 0, userTexts: 0, toolResultTexts: 0, answerTexts: 0, toolInputs: 0, changedTexts: 0 };
+  const maskCountedText = async (originalText, textKind, maskText = maskSensitiveText) => {
     maskCount[textKind] += 1;
-    const maskedText = await maskSensitiveText(originalText);
+    const maskedText = await maskText(originalText);
     if (maskedText !== originalText) maskCount.changedTexts += 1;
     return maskedText;
   };
@@ -96,7 +99,7 @@ async function maskRequestBody(requestBody, requestHeaders) {
   requestJson.system = await maskSystemPrompt(requestJson.system, maskCountedText);
   for (const message of requestJson.messages) {
     if (message.role === 'user') message.content = await maskUserContent(message.content, maskCountedText);
-    if (message.role === 'assistant') message.content = await maskAssistantToolInputs(message.content, maskCountedText);
+    if (message.role === 'assistant') message.content = await maskAssistantContent(message.content, maskCountedText);
   }
   return {
     forwardBody: Buffer.from(JSON.stringify(requestJson)),
@@ -122,11 +125,13 @@ async function maskUserContent(userContent, maskCountedText) {
   return userContent;
 }
 
-// 도구 실행 직전에 원래 값으로 되돌린 입력이 대화 기록에 남아 다음 요청에 실려 오므로 다시 가린다.
-// 가린 값에는 따옴표가 없어 JSON 글째로 바꿔도 JSON 이 깨지지 않는다
-async function maskAssistantToolInputs(assistantContent, maskCountedText) {
+// 원래 값으로 바꿔 보여 준 답 글과, 도구 실행 직전에 원래 값으로 되돌린 입력이 대화 기록에 남아 다음 요청에 실려 오므로 다시 가린다.
+// 가린 값에는 따옴표가 없어 도구 입력을 JSON 글째로 바꿔도 JSON 이 깨지지 않는다
+async function maskAssistantContent(assistantContent, maskCountedText) {
+  if (typeof assistantContent === 'string') return maskCountedText(assistantContent, 'answerTexts', maskPreviousAnswer);
   if (!Array.isArray(assistantContent)) return assistantContent;
   for (const contentBlock of assistantContent) {
+    if (contentBlock.type === 'text') contentBlock.text = await maskCountedText(contentBlock.text, 'answerTexts', maskPreviousAnswer);
     if (contentBlock.type === 'tool_use') contentBlock.input = JSON.parse(await maskCountedText(JSON.stringify(contentBlock.input), 'toolInputs'));
   }
   return assistantContent;
@@ -152,20 +157,34 @@ function sendToAnthropic(clientRequest, forwardBody) {
   });
 }
 
-// 응답은 받는 대로 그대로 넘긴다(스트리밍). 실패 응답이면 이유를 기록하려고 본문도 모아 돌려준다
-function pipeResponse(upstreamResponse, clientResponse) {
-  const isErrorResponse = upstreamResponse.statusCode >= 400;
-  const errorBodyChunks = [];
-  return new Promise((finishPiping) => {
-    upstreamResponse.on('data', (chunk) => {
-      clientResponse.write(chunk);
-      if (isErrorResponse) errorBodyChunks.push(chunk);
-    });
-    upstreamResponse.on('end', () => {
-      clientResponse.end();
-      finishPiping(isErrorResponse ? decodeErrorBody(Buffer.concat(errorBodyChunks), upstreamResponse.headers['content-encoding']) : null);
-    });
-  });
+// 응답을 사람에게 넘긴다. 스트리밍 응답은 받는 대로 답 글을 바꿔 넘기고, JSON 응답은 다 받은 뒤 바꿔 넘긴다.
+// 실패 응답은 그대로 넘기고 이유를 기록하려고 본문을 돌려준다
+async function relayResponse(upstreamResponse, clientResponse) {
+  const contentType = upstreamResponse.headers['content-type'] ?? '';
+  if (upstreamResponse.statusCode >= 400) return { errorBody: await relayErrorResponse(upstreamResponse, clientResponse) };
+  if (contentType.includes('text/event-stream')) return { unmaskedAnswerTexts: await relayAnswerStream(upstreamResponse, clientResponse) };
+  if (contentType.includes('application/json')) return { unmaskedAnswerTexts: await relayAnswerBody(upstreamResponse, clientResponse) };
+  upstreamResponse.pipe(clientResponse);
+  return {};
+}
+
+async function relayAnswerStream(upstreamResponse, clientResponse) {
+  const answerStreamUnmasker = createAnswerStreamUnmasker();
+  for await (const streamChunk of upstreamResponse) clientResponse.write(answerStreamUnmasker.unmaskStreamChunk(streamChunk));
+  clientResponse.end(answerStreamUnmasker.finishStream());
+  return answerStreamUnmasker.unmaskedAnswerCount();
+}
+
+async function relayAnswerBody(upstreamResponse, clientResponse) {
+  const { shownBodyText, unmaskedAnswerCount } = unmaskAnswerBody((await readStream(upstreamResponse)).toString('utf8'));
+  clientResponse.end(shownBodyText);
+  return unmaskedAnswerCount;
+}
+
+async function relayErrorResponse(upstreamResponse, clientResponse) {
+  const errorBodyBuffer = await readStream(upstreamResponse);
+  clientResponse.end(errorBodyBuffer);
+  return decodeErrorBody(errorBodyBuffer, upstreamResponse.headers['content-encoding']);
 }
 
 function failRequest(clientResponse, requestPath, relayError) {
