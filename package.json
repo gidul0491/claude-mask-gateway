@@ -1,6 +1,6 @@
 {
   "name": "claude-mask-gateway",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Claude Code 가 Anthropic 에 보내는 글의 개인정보·비밀값을 가리고, 도구를 실행하기 직전에 원래 값으로 되돌리는 통로",
   "type": "module",
   "license": "MIT",

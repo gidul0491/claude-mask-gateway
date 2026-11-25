@@ -14,6 +14,7 @@
 // 뒷부분은 원래 쓰인 모양이다. # 하나가 본 글자 하나다. Claude 가 모양을 바꿔 쓰면(###########) 그 모양으로 되돌린다.
 // DB 마다 저장 모양이 달라도 Claude 가 원래 값을 모른 채 맞는 모양으로 조회할 수 있게 하려는 것이다.
 // 이름·주소처럼 모양이 정해지지 않은 개인정보는 찾지 못한다.
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -211,7 +212,17 @@ function getMaskingKey() {
 function readOrCreateMaskingKey() {
   if (!fs.existsSync(MASKING_KEY_FILE)) {
     fs.mkdirSync(path.dirname(MASKING_KEY_FILE), { recursive: true, mode: 0o700 });
+    if (process.platform === 'win32') grantOwnerOnlyOnWindows(path.dirname(MASKING_KEY_FILE));
     fs.writeFileSync(MASKING_KEY_FILE, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
   }
   return fs.readFileSync(MASKING_KEY_FILE, 'utf8').trim();
+}
+
+// 윈도우는 mode 가 듣지 않는다. 상속 권한을 끊고 본인에게만 주며, (OI)(CI) 로 안에 만드는 키 파일까지 물려준다
+function grantOwnerOnlyOnWindows(keyFolder) {
+  const windowsUser = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : process.env.USERNAME;
+  const icaclsRun = spawnSync('icacls', [keyFolder, '/inheritance:r', '/grant:r', `${windowsUser}:(OI)(CI)F`], { encoding: 'utf8' });
+  if (icaclsRun.status !== 0) {
+    throw new Error(`${keyFolder} 를 본인만 읽게 하지 못했습니다: ${(icaclsRun.stderr || icaclsRun.stdout || '').trim()}`);
+  }
 }

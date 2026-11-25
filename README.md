@@ -26,21 +26,23 @@ DB_PASS=값      →  DB_PASS=[비밀값-xxxxxx]
 - 요청마다 가린 개수만 `log/masking-gateway.jsonl` 에 남긴다. 글 내용은 남기지 않는다.
 - 통로는 이 컴퓨터 안(`127.0.0.1`)에서만 열린다.
 
-## 설치 (macOS)
+## 설치 (macOS·윈도우)
 
-Node 22 이상이 필요하다. `install.sh` 를 실행할 때의 node 로 고정된다.
+Node 22 이상이 필요하다. `install.js` 를 실행할 때의 node 로 고정된다. 윈도우는 Git Bash 나 PowerShell 에서 실행한다.
 
 ```bash
 git clone https://github.com/gidul0491/claude-mask-gateway.git ~/git/claude-mask-gateway
-~/git/claude-mask-gateway/install.sh
+node ~/git/claude-mask-gateway/install.js
 ```
 
-1. `install.sh` 가 통로를 로그인할 때 뜨고 멈추면 다시 뜨게 등록한다(`~/Library/LaunchAgents/claude-mask-gateway.plist`). 포트는 47821 이고, `MASKING_GATEWAY_PORT=포트 ./install.sh` 로 바꿀 수 있다.
-2. 출력된 값을 `~/.claude/settings.json` 의 `env`, `hooks` 에 넣는다.
+1. `install.js` 가 통로를 로그인할 때 뜨고 멈추면 다시 뜨게 등록한 뒤 바로 띄운다. 포트는 47821 이고, `MASKING_GATEWAY_PORT=포트 node install.js` 로 바꿀 수 있다.
+   - macOS: `~/Library/LaunchAgents/claude-mask-gateway.plist`
+   - 윈도우: 시작 프로그램 폴더의 `claude-mask-gateway.vbs`. 창 없이 띄우고, 멈추면 3초 뒤 다시 띄운다. 관리자 권한은 필요 없다.
+2. 출력된 값을 `~/.claude/settings.json`(윈도우는 `%USERPROFILE%\.claude\settings.json`)의 `env`, `hooks` 에 넣는다.
 3. 새 대화부터 적용된다. `log/masking-gateway.jsonl` 에 요청이 쌓이면 통로를 지나는 것이다.
 
-- 마스킹 키는 처음 실행할 때 `~/.config/claude-mask-gateway/masking-key` 에 만든다. 여러 컴퓨터에 같은 키를 두면 같은 값은 같은 이름표로 가려진다.
-- 통로가 멈추면 Claude Code 가 응답하지 않는다. `launchctl list | grep claude-mask-gateway` 로 떠 있는지 보고, 급하면 settings.json 에서 넣은 두 항목을 빼면 원래대로 돌아간다.
+- 마스킹 키는 처음 실행할 때 `~/.config/claude-mask-gateway/masking-key` 에 만들고 본인만 읽게 한다(윈도우는 `icacls`). 여러 컴퓨터에 같은 키를 두면 같은 값은 같은 이름표로 가려진다.
+- 통로가 멈추면 Claude Code 가 응답하지 않는다. `curl http://127.0.0.1:47821` 로 응답이 오는지 보고, 급하면 settings.json 에서 넣은 두 항목을 빼면 원래대로 돌아간다. 통로의 출력은 `log/masking-gateway.out.log` 에 남는다.
 - 요청 주소를 따로 정하는 앱(예: Claude 데스크톱 앱의 Code 탭)은 `ANTHROPIC_BASE_URL` 을 따르지 않아 통로를 지나지 않는다. 이때 훅은 아무 일도 하지 않는다.
 
 ## 가리는 결과 보기
@@ -56,7 +58,7 @@ node src/masking-report.cli.js <파일>
 `claude` 를 직접 실행하는 프로그램은 통로를 빈 포트로 띄우고 그 주소를 `ANTHROPIC_BASE_URL` 로 넘긴다.
 
 ```json
-"dependencies": { "claude-mask-gateway": "github:gidul0491/claude-mask-gateway#v1.1.0" }
+"dependencies": { "claude-mask-gateway": "github:gidul0491/claude-mask-gateway#v1.2.0" }
 ```
 
 ```js
