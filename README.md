@@ -58,7 +58,7 @@ node src/masking-report.cli.js <파일>
 `claude` 를 직접 실행하는 프로그램은 통로를 빈 포트로 띄우고 그 주소를 `ANTHROPIC_BASE_URL` 로 넘긴다.
 
 ```json
-"dependencies": { "claude-mask-gateway": "github:gidul0491/claude-mask-gateway#v1.2.0" }
+"dependencies": { "claude-mask-gateway": "github:gidul0491/claude-mask-gateway#v1.2.1" }
 ```
 
 ```js
