@@ -19,6 +19,7 @@ DB_PASS=값      →  DB_PASS=[비밀값-xxxxxx]
 - `xxxxxx` 는 값마다 정해지는 6글자다. 마스킹 키로 만든 해시라서 키 없이는 원래 값을 알 수 없다.
 - Claude 는 원래 값을 모른 채 이름표를 명령·검색어에 쓴다. 도구 실행 직전 훅(`src/unmask-tool-input.hook.js`)이 통로에 물어 원래 값으로 바꾼다.
 - 개인정보는 모든 도구 입력에서 되돌린다. 비밀값은 명령 실행(Bash)에서만 되돌려서 파일에 비밀값이 남지 않는다.
+- 명령 실행의 명령 글에는 원래 값을 그 자리의 따옴표(따옴표 밖, `'…'`, `"…"`, 히어독)에 맞춰 넣는다. 원래 값에 `$` `'` `"` 가 있어도 셸이 그 글자 그대로 받는다.
 - Claude 가 쓴 답 글은 통로가 개인정보 이름표를 원래 값으로 바꿔 화면에 보여 준다. 비밀값은 이름표로 둔다. 생각 블록은 바꾸지 않는다.
 - 바꿔 보여 준 답 글은 다음 요청에 실려 올 때 Claude 가 처음 쓴 가린 글로 되돌려 보낸다.
 - 개인정보 이름표 뒤의 모양(`###-####-####`)은 Claude 가 바꿔 쓸 수 있다. `###########` 로 쓰면 하이픈 없이 되돌린다. DB 마다 저장 모양이 달라도 맞는 모양으로 조회할 수 있다.
@@ -58,7 +59,7 @@ node src/masking-report.cli.js <파일>
 `claude` 를 직접 실행하는 프로그램은 통로를 빈 포트로 띄우고 그 주소를 `ANTHROPIC_BASE_URL` 로 넘긴다.
 
 ```json
-"dependencies": { "claude-mask-gateway": "github:gidul0491/claude-mask-gateway#v1.2.1" }
+"dependencies": { "claude-mask-gateway": "github:gidul0491/claude-mask-gateway#v1.2.2" }
 ```
 
 ```js
